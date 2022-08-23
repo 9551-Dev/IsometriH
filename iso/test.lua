@@ -13,9 +13,17 @@ local function init(terminal)
     screen_height = screen_height * 3
 
     local grid = {n=0,start=1}
-    local offset_scripts = {}
     local tiles = {}
     local loaded_tiles = {}
+
+    local grid_offset_x = 0
+    local grid_offset_y = 0
+    local grid_offset_z = 0
+    local screen_offset_x = 0
+    local screen_offset_y = 0
+
+    local screen_offset_scripts = {}
+    local grid_offset_scripts = {}
 
     local function init_grid_point(x,y,z)
         if not grid[y] then
@@ -118,13 +126,22 @@ local function init(terminal)
                     for k,sprite in ipairs(sprites or {}) do
                         local sprite = loaded_tiles[sprite]
                         if sprite then
-                            local screen_x = x*i + z*j
-                            local screen_y = x*press_amount + z*press_amount - y + 1
-                            if offset_scripts[x] and offset_scripts[x][y] and type(offset_scripts[x][y][z]) == "function" then
-                                screen_x,screen_y = offset_scripts[x][y][z](screen_x,screen_y)
+                            local offset_x = grid_offset_x
+                            local offset_y = grid_offset_y
+                            local offset_z = grid_offset_z
+                            if grid_offset_scripts[x] and grid_offset_scripts[x][y] and type(grid_offset_scripts[x][y][z]) == "function" then
+                                local ox,oy,oz = grid_offset_scripts[x][y][z](x,y,z)
+                                if ox then offset_x = offset_x + ox end
+                                if oy then offset_y = offset_y + oy end
+                                if oz then offset_z = offset_z + oz end
                             end
-                            local tex_x = screen_x*sprite.w/2 - sprite.w/2 + screen_width/2 - 1
-                            local tex_y = screen_y*sprite.h/2
+                            local screen_x = (x + offset_x)*i + (z + offset_z)*j
+                            local screen_y = (x + offset_x)*press_amount + (z + offset_z)*press_amount - (y + offset_y) + 1
+                            if screen_offset_scripts[x] and screen_offset_scripts[x][y] and type(screen_offset_scripts[x][y][z]) == "function" then
+                                screen_x,screen_y = screen_offset_scripts[x][y][z](screen_x,screen_y)
+                            end
+                            local tex_x = (screen_x + screen_offset_x)*sprite.w/2 - sprite.w/2 + screen_width/2 - 1
+                            local tex_y = (screen_y + screen_offset_y)*sprite.h/2
                             draw_image(sprite,tex_x,tex_y,coordinate_grid,x,y,z,sprite)
                         end
                     end
@@ -156,19 +173,19 @@ local function init(terminal)
 
         local update_graphics = coroutine.create(function()
             while true do
-                local data = draw_grid()
-                coroutine.yield("return",true,data)
-                box:push_updates()
-                box:draw()
-                box:clear(terminal.getBackgroundColor())
+                local screen_data = draw_grid()
+                coroutine.yield("return",true,screen_data)
                 if type(data.draw) == "function" then
-                    xpcall(data.draw,function(err)
+                    xpcall(function() data.draw(box) end,function(err)
                         run = false
                         if err then
                             printError("Error during isometrih.update "..tostring(err))
                         end
                     end)
                 end
+                box:push_updates()
+                box:draw()
+                box:clear(terminal.getBackgroundColor())
                 ran = ran + 1
                 sleep(update_rate)
             end
@@ -208,13 +225,35 @@ local function init(terminal)
         end
     end
 
-    function methods.set_block(x,y,z,tile)
+    function methods.set_block(tile,x,y,z)
         init_grid_point(x,y,z)
         grid[y][z][x] = tile
     end
 
     function methods.get_block(x,y,z)
         return grid[y] and grid[y][z] and grid[y][z][x]
+    end
+
+    function methods.get_tiles(filter)
+        local found = {}
+        for y=grid.start or 1,grid.n do
+            local layer = grid[y]
+            for z=(layer or {start=1}).start,(layer or {n=0}).n or 0 do
+                local row = layer[z]
+                for x=(row or {start=1}).start,(row or {n=0}).n do
+                    local sprite_name = row[x]
+                    local sprites = {}
+                    if type(sprite_name) == "string" then sprites = {sprite_name}
+                    elseif type(sprite_name) == "table" then sprites = sprite_name end
+                    for k,sprite in ipairs(sprites or {}) do
+                        if filter(sprite) then
+                            found[#found+1] = {x=x,y=y,z=z,sprite=sprite}
+                        end
+                    end
+                end
+            end
+        end
+        return found
     end
 
     function methods.fill_blocks(tile,start_x,start_y,start_z,end_x,end_y,end_z)
@@ -253,20 +292,59 @@ local function init(terminal)
         load_images()
     end
 
-    function methods.set_offset_script(x,y,z,f)
-        if not offset_scripts[x] then offset_scripts[x] = {} end
-        if not offset_scripts[x][y] then offset_scripts[x][y] = {} end
-        offset_scripts[x][y][z] = f
+    function methods.set_screen_offset_script(x,y,z,f)
+        if not screen_offset_scripts[x] then screen_offset_scripts[x] = {} end
+        if not screen_offset_scripts[x][y] then screen_offset_scripts[x][y] = {} end
+        screen_offset_scripts[x][y][z] = f
     end
 
-    function methods.del_offset_script(x,y,z)
-        if not offset_scripts[x] then offset_scripts[x] = {} end
-        if not offset_scripts[x][y] then offset_scripts[x][y] = {} end
-        offset_scripts[x][y][z] = nil
+    function methods.del_screen_offset_script(x,y,z)
+        if not screen_offset_scripts[x] then screen_offset_scripts[x] = {} end
+        if not screen_offset_scripts[x][y] then screen_offset_scripts[x][y] = {} end
+        screen_offset_scripts[x][y][z] = nil
     end
     
-    function methods.del_offset_scripts()
-        offset_scripts = {}
+    function methods.del_screen_offset_scripts()
+        screen_offset_scripts = {}
+    end
+
+    function methods.set_grid_offset_script(x,y,z,f)
+        if not grid_offset_scripts[x] then grid_offset_scripts[x] = {} end
+        if not grid_offset_scripts[x][y] then grid_offset_scripts[x][y] = {} end
+        grid_offset_scripts[x][y][z] = f
+    end
+
+    function methods.del_grid_offset_script(x,y,z)
+        if not grid_offset_scripts[x] then grid_offset_scripts[x] = {} end
+        if not grid_offset_scripts[x][y] then grid_offset_scripts[x][y] = {} end
+        grid_offset_scripts[x][y][z] = nil
+    end
+
+    function methods.del_grid_offset_scripts()
+        grid_offset_scripts = {}
+    end
+
+    function methods.set_jhat(n)
+        j = -n
+    end
+
+    function methods.set_ihat(n)
+        i = n
+    end
+
+    function methods.set_compression_level(n)
+        press_amount = n
+    end
+
+    function methods.set_screen_offset(x,y)
+        if type(x) == "number" then screen_offset_x = x end
+        if type(y) == "number" then screen_offset_y = y end
+    end
+
+    function methods.set_grid_offset(x,y,z)
+        if type(x) == "number" then grid_offset_x = x end
+        if type(y) == "number" then grid_offset_y = y end
+        if type(z) == "number" then grid_offset_z = z end
     end
 
     return setmetatable(data,{__index=methods})
