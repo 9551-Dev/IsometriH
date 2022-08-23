@@ -2,10 +2,11 @@ local pixelbox = require("pixelbox")
 local function init(terminal)
     local box = pixelbox.new(terminal)
     terminal.clear()
+    local update_rate = 0.05
+
     local i = 1
     local j = -1
     local press_amount = 0.5
-    local update_rate = 0.2
 
     local screen_width,screen_height = terminal.getSize()
 
@@ -153,7 +154,6 @@ local function init(terminal)
 
     local methods = {}
     local data = {}
-    local last_map
 
     function methods.run()
 
@@ -169,12 +169,13 @@ local function init(terminal)
         end
         load_images()
 
-        local ran = 0
+        local screen_data
+        local sd_change = false
 
         local update_graphics = coroutine.create(function()
             while true do
-                local screen_data = draw_grid()
-                coroutine.yield("return",true,screen_data)
+                screen_data = draw_grid()
+                sd_change = true
                 if type(data.draw) == "function" then
                     xpcall(function() data.draw(box) end,function(err)
                         run = false
@@ -186,28 +187,29 @@ local function init(terminal)
                 box:push_updates()
                 box:draw()
                 box:clear(terminal.getBackgroundColor())
-                ran = ran + 1
-                sleep(update_rate)
             end
         end)
 
-        local filter
-
-        coroutine.resume(update_graphics)
-        coroutine.resume(update_graphics)
-
-        while run and coroutine.status(update_graphics) ~= "dead" do
-            local ev = table.pack(os.pullEventRaw())
-            if ev[1] == "terminate" then break end
-            if not filter or ev[1] == "filter" then
-                local ok, ret, is_map, map = coroutine.resume(update_graphics,table.unpack(ev,1,ev.n))
-                if not ok and coroutine.status(update_graphics) == "dead" then
-                    run = false
-                    printError("Error during runtime: "..ret)
+        local on_event_thread = coroutine.create(function()
+            while true do
+                local ev = table.pack(os.pullEventRaw())
+                if data.on_event and screen_data then
+                    xpcall(function() data.on_event(screen_data,table.unpack(ev,1,ev.n)) end,function(err)
+                        run = false
+                        if err then
+                            printError("Error during isometrih.on_event "..tostring(err))
+                        end
+                    end)
                 end
-                if is_map and ret == "return" then last_map = map coroutine.resume(update_graphics,table.unpack(ev,1,ev.n)) end
-                if is_map and ret == "return" and type(data.update) == "function" then
-                    xpcall(function() data.update(map) end,function(err)
+            end
+        end)
+
+        local update_thread = coroutine.create(function()
+            while true do
+                local ev = table.pack(os.pullEventRaw())
+                if sd_change then
+                    sd_change = false
+                    xpcall(function() data.update(screen_data,table.unpack(ev,1,ev.n)) end,function(err)
                         run = false
                         if err then
                             printError("Error during isometrih.update "..tostring(err))
@@ -215,13 +217,38 @@ local function init(terminal)
                     end)
                 end
             end
-            if data.on_event and last_map then
-                xpcall(function() data.on_event(last_map,table.unpack(ev,1,ev.n)) end,function(err)
+        end)
+
+        local ok,filter_1 = coroutine.resume(update_graphics)
+        local ok,filter_2 = coroutine.resume(on_event_thread)
+        local ok,filter_3 = coroutine.resume(update_thread)
+
+        while run and coroutine.status(update_graphics) ~= "dead" do
+            local ev = table.pack(os.pullEvent())
+            if ev[1] == "terminate" then break end
+            if not filter_1 or ev[1] == filter_1 then
+                local ok, ret = coroutine.resume(update_graphics,table.unpack(ev,1,ev.n))
+                if ok then filter_1 = ret end
+                if not ok and coroutine.status(update_graphics) == "dead" then
                     run = false
-                    if err then
-                        printError("Error during isometrih.on_event "..tostring(err))
-                    end
-                end)
+                    printError("Error during runtime: "..ret)
+                end
+            end
+            if not filter_2 or ev[1] == filter_2 then
+                local ok, ret = coroutine.resume(on_event_thread,table.unpack(ev,1,ev.n))
+                if ok then filter_2 = ret end
+                if not ok and coroutine.status(on_event_thread) == "dead" then
+                    run = false
+                    printError("Error during isometrih.on_event: "..ret)
+                end
+            end
+            if not filter_3 or ev[1] == filter_3 then
+                local ok, ret = coroutine.resume(update_thread,table.unpack(ev,1,ev.n))
+                if ok then filter_3 = ret end
+                if not ok and coroutine.status(update_thread) == "dead" then
+                    run = false
+                    printError("Error during isometrih.update: "..ret)
+                end
             end
         end
     end
@@ -346,6 +373,10 @@ local function init(terminal)
         if type(x) == "number" then grid_offset_x = x end
         if type(y) == "number" then grid_offset_y = y end
         if type(z) == "number" then grid_offset_z = z end
+    end
+
+    function methods.set_update_rate(n)
+        update_rate = n
     end
 
     return setmetatable(data,{__index=methods})
