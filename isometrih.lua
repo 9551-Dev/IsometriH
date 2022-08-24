@@ -141,6 +141,8 @@ local function init(terminal)
                     end
                 end
             end
+            os.queueEvent("yield")
+            os.pullEvent("yield")
         end
         return coordinate_grid
     end
@@ -260,6 +262,18 @@ local function init(terminal)
         expect(4,z,"number")
         init_grid_point(x,y,z)
         grid[y][z][x] = tile
+    end
+
+    function methods.set_blocks(blocks)
+        expect(1,blocks,"table")
+        for k,v in pairs(blocks) do
+            if not (type(v.x) == "number") then error("Error during isometrih.set_blocks: Block " ..k.." has invalid x position") end
+            if not (type(v.y) == "number") then error("Error during isometrih.set_blocks: Block " ..k.." has invalid y position") end
+            if not (type(v.z) == "number") then error("Error during isometrih.set_blocks: Block " ..k.." has invalid z position") end
+            if not (type(v.tile) == "string" or type(v.tile) == "nil") then error("Error during isometrih.set_blocks: Block "..k.." is missing 'tile'") end
+            init_grid_point(v.x,v.y,v.z)
+            grid[v.y][v.z][v.x] = v.tile
+        end
     end
 
     function methods.get_block(x,y,z)
@@ -486,6 +500,7 @@ local function init(terminal)
     methods.replace_tiles = methods.replace_blocks
     methods.load_tiles = methods.load_tile
     methods.get_block_definitions = methods.get_tile_definitions
+    methods.set_tiles = methods.set_blocks
 
     return setmetatable(data,{__index=methods})
 end
