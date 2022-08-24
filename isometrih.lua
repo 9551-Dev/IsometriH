@@ -27,6 +27,8 @@ local function init(terminal)
 
     local screen_offset_scripts = {}
     local grid_offset_scripts = {}
+    local tile_update_scripts = {}
+    local tasks = {}
 
     local function init_grid_point(x,y,z)
         if not grid[y] then
@@ -119,11 +121,16 @@ local function init(terminal)
                     elseif type(sprite_name) == "table" then sprites = sprite_name end
                     for k,sprite in ipairs(sprites or {}) do
                         local sprite = loaded_tiles[sprite]
+                        local has_offset_script = false
                         if sprite then
                             local offset_x = grid_offset_x
                             local offset_y = grid_offset_y
                             local offset_z = grid_offset_z
+                            if tile_update_scripts[x] and tile_update_scripts[x][y] and type(tile_update_scripts[x][y][z]) == "function" then
+                                tile_update_scripts[x][y][z](sprite,x,y,z)
+                            end
                             if grid_offset_scripts[x] and grid_offset_scripts[x][y] and type(grid_offset_scripts[x][y][z]) == "function" then
+                                has_offset_script = true
                                 local ox,oy,oz = grid_offset_scripts[x][y][z](x,y,z)
                                 if ox then offset_x = offset_x + ox end
                                 if oy then offset_y = offset_y + oy end
@@ -132,11 +139,14 @@ local function init(terminal)
                             local screen_x = (x + offset_x)*i + (z + offset_z)*j
                             local screen_y = (x + offset_x)*press_amount + (z + offset_z)*press_amount - (y + offset_y) + 1
                             if screen_offset_scripts[x] and screen_offset_scripts[x][y] and type(screen_offset_scripts[x][y][z]) == "function" then
+                                has_offset_script = true
                                 screen_x,screen_y = screen_offset_scripts[x][y][z](screen_x,screen_y)
                             end
                             local tex_x = (screen_x + screen_offset_x)*sprite.w/2 - sprite.w/2 + screen_width/2 - 1
                             local tex_y = (screen_y + screen_offset_y)*sprite.h/2
-                            draw_image(sprite,tex_x,tex_y,coordinate_grid,x,y,z,sprite)
+                            if not (grid[y+1] and grid[y+1][z] and grid[y+1][z][x] and layer[z+1] and layer[z+1][x] and row[x+1]) or has_offset_script then
+                                draw_image(sprite,tex_x,tex_y,coordinate_grid,x,y,z,sprite)
+                            end
                         end
                     end
                 end
@@ -182,8 +192,6 @@ local function init(terminal)
                 box:push_updates()
                 box:draw()
                 box:clear(terminal.getBackgroundColor())
-                local st = os.epoch("utc")
-                local et = os.epoch("utc")
                 sleep(update_rate)
             end
         end)
@@ -252,6 +260,18 @@ local function init(terminal)
                     printError("Error during isometrih.update: "..tostring(ret))
                 end
             end
+            for k,v in pairs(tasks) do
+                if not v.filter or ev[1] == v.filter then
+                    local ok,filter = coroutine.resume(v.coro)
+                    if ok then v.filter = filter end
+                    if ok and coroutine.status(v.coro) == "dead" then
+                        tasks[k] = nil
+                    elseif not ok and coroutine.status(v.coro) == "dead" then
+                        run = false
+                        printError("Error in background task: "..tostring(filter))
+                    end
+                end
+            end
         end
     end
 
@@ -262,6 +282,21 @@ local function init(terminal)
         expect(4,z,"number")
         init_grid_point(x,y,z)
         grid[y][z][x] = tile
+    end
+
+    function methods.move_block(x,y,z,fx,fy,fz)
+        expect(1,x,"number")
+        expect(2,y,"number")
+        expect(3,z,"number")
+        expect(4,fx,"number")
+        expect(5,fy,"number")
+        expect(6,fz,"number")
+        local tile = grid[y] and grid[y][z] and grid[y][z][x]
+        if tile then
+            grid[y][z][x] = nil
+            init_grid_point(fx,fy,fz)
+            grid[fy][fz][fx] = tile
+        end
     end
 
     function methods.set_blocks(blocks)
@@ -446,8 +481,31 @@ local function init(terminal)
         grid_offset_scripts[x][y][z] = nil
     end
 
+    function methods.del_tile_update_scripts()
+        screen_offset_scripts = {}
+    end
+
+    function methods.set_tile_update_script(x,y,z,f)
+        expect(1,x,"number")
+        expect(2,y,"number")
+        expect(3,z,"number")
+        expect(4,f,"function")
+        if not tile_update_scripts[x] then tile_update_scripts[x] = {} end
+        if not tile_update_scripts[x][y] then tile_update_scripts[x][y] = {} end
+        tile_update_scripts[x][y][z] = f
+    end
+
+    function methods.del_tile_update_script(x,y,z)
+        expect(1,x,"number")
+        expect(2,y,"number")
+        expect(3,z,"number")
+        if not tile_update_scripts[x] then tile_update_scripts[x] = {} end
+        if not tile_update_scripts[x][y] then tile_update_scripts[x][y] = {} end
+        tile_update_scripts[x][y][z] = nil
+    end
+
     function methods.del_grid_offset_scripts()
-        grid_offset_scripts = {}
+        tile_update_scripts = {}
     end
 
     function methods.set_jhat(n)
@@ -494,6 +552,13 @@ local function init(terminal)
         grid = {n=0,start=1}
     end
 
+    function methods.schedule_task(f)
+        expect(1,f,"function")
+        tasks[{}] = {
+            coro = coroutine.create(f)
+        }
+    end
+
     methods.start = methods.run
     methods.set_tile = methods.set_block
     methods.fill_tiles = methods.fill_blocks
@@ -501,6 +566,8 @@ local function init(terminal)
     methods.load_tiles = methods.load_tile
     methods.get_block_definitions = methods.get_tile_definitions
     methods.set_tiles = methods.set_blocks
+    methods.move_tile = methods.move_block
+    methods.async = methods.schedule_task
 
     return setmetatable(data,{__index=methods})
 end
