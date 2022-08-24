@@ -560,6 +560,7 @@ local function init(terminal)
     end
 
     methods.start = methods.run
+    methods.get_tile = methods.get_block
     methods.set_tile = methods.set_block
     methods.fill_tiles = methods.fill_blocks
     methods.replace_tiles = methods.replace_blocks
