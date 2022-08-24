@@ -338,8 +338,8 @@ local function init(terminal)
     function methods.fill_blocks(tile,start_x,start_y,start_z,end_x,end_y,end_z)
         expect(1,tile,"string","table")
         if start_x > end_x then start_x,end_x = end_x,start_x end
-        if start_y > end_y then start_y,end_y = end_x,start_y end
-        if start_z > end_z then start_z,end_z = end_x,start_z end
+        if start_y > end_y then start_y,end_y = end_y,start_y end
+        if start_z > end_z then start_z,end_z = end_z,start_z end
         for x=start_x,end_x do
             for y=start_y,end_y do
                 for z=start_z,end_z do
