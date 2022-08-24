@@ -256,7 +256,7 @@ local function init(terminal)
     end
 
     function methods.set_block(tile,x,y,z)
-        expect(1,tile,"string","table")
+        expect(1,tile,"string","table","nil")
         expect(2,x,"number")
         expect(3,y,"number")
         expect(4,z,"number")
