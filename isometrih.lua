@@ -1,5 +1,7 @@
 local pixelbox = require("pixelbox")
+local expect = require("cc.expect").expect
 local function init(terminal)
+    expect(1,terminal,"table")
     local box = pixelbox.new(terminal)
     terminal.clear()
     local update_rate = 0.05
@@ -29,32 +31,22 @@ local function init(terminal)
     local function init_grid_point(x,y,z)
         if not grid[y] then
             grid[y] = {}
-            if y > 0 then
-                grid[y].n = y
+            if z > 0 then
+                grid[y].n = z
                 grid[y].start = 1
             else
                 grid[y].n = 1
-                grid[y].start = y
+                grid[y].start = z
             end
         end
         if not grid[y][z] then
             grid[y][z] = {}
             if z > 0 then
-                grid[y][z].n = z
+                grid[y][z].n = x
                 grid[y][z].start = 1
             else
                 grid[y][z].n = 1
-                grid[y][z].start = z
-            end
-        end
-        if not grid[y][z][x] then
-            grid[y][z][x] = {}
-            if x > 0 then
-                grid[y][z][x].n = x
-                grid[y][z][x].start = 1
-            else
-                grid[y][z][x].n = 1
-                grid[y][z][x].start = x
+                grid[y][z].start = x
             end
         end
         if y > grid.n then grid.n = y end
@@ -67,6 +59,7 @@ local function init(terminal)
 
     local function load_images()
         for k,v in pairs(tiles) do
+            if type(v.tile_name) ~= "string" then error("Tile name must be a string",2) end
             local file = fs.open(v.path,"r")
             local data = file.readAll()
             file.close()
@@ -180,13 +173,16 @@ local function init(terminal)
                     xpcall(function() data.draw(box) end,function(err)
                         run = false
                         if err then
-                            printError("Error during isometrih.update "..tostring(err))
+                            printError("Error during isometrih.update: "..tostring(err))
                         end
                     end)
                 end
                 box:push_updates()
                 box:draw()
                 box:clear(terminal.getBackgroundColor())
+                local st = os.epoch("utc")
+                local et = os.epoch("utc")
+                sleep(update_rate)
             end
         end)
 
@@ -197,7 +193,7 @@ local function init(terminal)
                     xpcall(function() data.on_event(screen_data,table.unpack(ev,1,ev.n)) end,function(err)
                         run = false
                         if err then
-                            printError("Error during isometrih.on_event "..tostring(err))
+                            printError("Error during isometrih.on_event: "..tostring(err))
                         end
                     end)
                 end
@@ -207,7 +203,7 @@ local function init(terminal)
         local update_thread = coroutine.create(function()
             while true do
                 local ev = table.pack(os.pullEventRaw())
-                if sd_change then
+                if sd_change and data.update then
                     sd_change = false
                     xpcall(function() data.update(screen_data,table.unpack(ev,1,ev.n)) end,function(err)
                         run = false
@@ -219,9 +215,13 @@ local function init(terminal)
             end
         end)
 
-        local ok,filter_1 = coroutine.resume(update_graphics)
-        local ok,filter_2 = coroutine.resume(on_event_thread)
-        local ok,filter_3 = coroutine.resume(update_thread)
+        local ok1,filter_1 = coroutine.resume(update_graphics)
+        local ok2,filter_2 = coroutine.resume(on_event_thread)
+        local ok3,filter_3 = coroutine.resume(update_thread)
+
+        if not ok1 then printError("Error during runtime: "..tostring(filter_1)) end
+        if not ok2 then printError("Error during runtime: "..tostring(filter_2)) end
+        if not ok3 then printError("Error during runtime: "..tostring(filter_3)) end
 
         while run and coroutine.status(update_graphics) ~= "dead" do
             local ev = table.pack(os.pullEvent())
@@ -231,7 +231,7 @@ local function init(terminal)
                 if ok then filter_1 = ret end
                 if not ok and coroutine.status(update_graphics) == "dead" then
                     run = false
-                    printError("Error during runtime: "..ret)
+                    printError("Error during runtime: "..tostring(ret))
                 end
             end
             if not filter_2 or ev[1] == filter_2 then
@@ -239,7 +239,7 @@ local function init(terminal)
                 if ok then filter_2 = ret end
                 if not ok and coroutine.status(on_event_thread) == "dead" then
                     run = false
-                    printError("Error during isometrih.on_event: "..ret)
+                    printError("Error during isometrih.on_event: "..tostring(ret))
                 end
             end
             if not filter_3 or ev[1] == filter_3 then
@@ -247,22 +247,30 @@ local function init(terminal)
                 if ok then filter_3 = ret end
                 if not ok and coroutine.status(update_thread) == "dead" then
                     run = false
-                    printError("Error during isometrih.update: "..ret)
+                    printError("Error during isometrih.update: "..tostring(ret))
                 end
             end
         end
     end
 
     function methods.set_block(tile,x,y,z)
+        expect(1,tile,"string","table")
+        expect(2,x,"number")
+        expect(3,y,"number")
+        expect(4,z,"number")
         init_grid_point(x,y,z)
         grid[y][z][x] = tile
     end
 
     function methods.get_block(x,y,z)
+        expect(1,x,"number")
+        expect(2,y,"number")
+        expect(3,z,"number")
         return grid[y] and grid[y][z] and grid[y][z][x]
     end
 
     function methods.get_tiles(filter)
+        expect(1,filter,"function")
         local found = {}
         for y=grid.start or 1,grid.n do
             local layer = grid[y]
@@ -274,7 +282,7 @@ local function init(terminal)
                     if type(sprite_name) == "string" then sprites = {sprite_name}
                     elseif type(sprite_name) == "table" then sprites = sprite_name end
                     for k,sprite in ipairs(sprites or {}) do
-                        if filter(sprite) then
+                        if filter(sprite,x,y,z) then
                             found[#found+1] = {x=x,y=y,z=z,sprite=sprite}
                         end
                     end
@@ -284,7 +292,37 @@ local function init(terminal)
         return found
     end
 
+    function methods.get_tile_definitions()
+        return methods.get_tiles(function() return true end)
+    end
+
+    function methods.get_bounds()
+        local min_x,max_x = math.huge,-math.huge
+        local min_y,max_y = grid.start or 1,grid.n
+        local min_z,max_z = math.huge,-math.huge
+        for y=grid.start or 1,grid.n do
+            local layer = grid[y]
+            local startz = (layer or {start=1}).start
+            local endz = (layer or {n=0}).n
+            min_z = math.min(min_z,startz)
+            max_z = math.max(max_z,endz)
+            for z=startz,endz do
+                local row = layer[z]
+                local startx = (row or {start=1}).start
+                local endx = (row or {n=0}).n or 0
+                min_x = math.min(min_x,startx)
+                max_x = math.max(max_x,endx)
+            end
+        end
+        return {
+            {min_x,max_x},
+            {min_y,max_y},
+            {min_z,max_z}
+        }
+    end
+
     function methods.fill_blocks(tile,start_x,start_y,start_z,end_x,end_y,end_z)
+        expect(1,tile,"string","table")
         if start_x > end_x then start_x,end_x = end_x,start_x end
         if start_y > end_y then start_y,end_y = end_x,start_y end
         if start_z > end_z then start_z,end_z = end_x,start_z end
@@ -298,9 +336,36 @@ local function init(terminal)
         end
     end
 
-    function methods.reload_textures()
-        tiles = {}
+    function methods.replace_blocks(start_type,new_type)
+        expect(1,start_type,"string")
+        expect(1,new_type,"string")
+        methods.get_tiles(function(sprite,x,y,z)
+            if sprite == start_type then
+                grid[y][z][x] = new_type
+            end
+        end)
+    end
+
+    function methods.reload_tiles()
+        loaded_tiles = {}
         load_images()
+    end
+
+    function methods.get_loaded_tiles()
+        return loaded_tiles
+    end
+
+    function methods.get_tile_cache()
+        return tiles
+    end
+
+    function methods.remove_from_tile_cache(tile)
+        expect(1,tile,"string")
+        for k,v in pairs(tiles) do
+            if v.tile_name == tile then
+                tiles[k] = nil
+            end
+        end
     end
 
     function methods.load_tile(...)
@@ -313,6 +378,11 @@ local function init(terminal)
         loaded_tiles = {}
     end
 
+    function methods.unload_tile(type)
+        expect(1,type,"string")
+        loaded_tiles[type] = nil
+    end
+
     function methods.delete_tile(...)
         for k,v in pairs({...}) do
             tiles[v] = nil
@@ -321,12 +391,19 @@ local function init(terminal)
     end
 
     function methods.set_screen_offset_script(x,y,z,f)
+        expect(1,x,"number")
+        expect(2,y,"number")
+        expect(3,z,"number")
+        expect(4,f,"function")
         if not screen_offset_scripts[x] then screen_offset_scripts[x] = {} end
         if not screen_offset_scripts[x][y] then screen_offset_scripts[x][y] = {} end
         screen_offset_scripts[x][y][z] = f
     end
 
     function methods.del_screen_offset_script(x,y,z)
+        expect(1,x,"number")
+        expect(2,y,"number")
+        expect(3,z,"number")
         if not screen_offset_scripts[x] then screen_offset_scripts[x] = {} end
         if not screen_offset_scripts[x][y] then screen_offset_scripts[x][y] = {} end
         screen_offset_scripts[x][y][z] = nil
@@ -337,12 +414,19 @@ local function init(terminal)
     end
 
     function methods.set_grid_offset_script(x,y,z,f)
+        expect(1,x,"number")
+        expect(2,y,"number")
+        expect(3,z,"number")
+        expect(4,f,"function")
         if not grid_offset_scripts[x] then grid_offset_scripts[x] = {} end
         if not grid_offset_scripts[x][y] then grid_offset_scripts[x][y] = {} end
         grid_offset_scripts[x][y][z] = f
     end
 
     function methods.del_grid_offset_script(x,y,z)
+        expect(1,x,"number")
+        expect(2,y,"number")
+        expect(3,z,"number")
         if not grid_offset_scripts[x] then grid_offset_scripts[x] = {} end
         if not grid_offset_scripts[x][y] then grid_offset_scripts[x][y] = {} end
         grid_offset_scripts[x][y][z] = nil
@@ -353,31 +437,55 @@ local function init(terminal)
     end
 
     function methods.set_jhat(n)
+        expect(1,n,"number")
         j = -n
     end
 
     function methods.set_ihat(n)
+        expect(1,n,"number")
         i = n
     end
 
     function methods.set_compression_level(n)
+        expect(1,n,"number")
         press_amount = n
     end
 
     function methods.set_screen_offset(x,y)
+        expect(1,x,"number","nil")
+        expect(2,y,"number","nil")
         if type(x) == "number" then screen_offset_x = x end
         if type(y) == "number" then screen_offset_y = y end
     end
 
     function methods.set_grid_offset(x,y,z)
+        expect(1,x,"number","nil")
+        expect(2,y,"number","nil")
+        expect(3,z,"number","nil")
         if type(x) == "number" then grid_offset_x = x end
         if type(y) == "number" then grid_offset_y = y end
         if type(z) == "number" then grid_offset_z = z end
     end
 
     function methods.set_update_rate(n)
+        expect(1,n,"number")
         update_rate = n
     end
+
+    function methods.get_grid()
+        return grid
+    end
+
+    function methods.clear_grid()
+        grid = {n=0,start=1}
+    end
+
+    methods.start = methods.run
+    methods.set_tile = methods.set_block
+    methods.fill_tiles = methods.fill_blocks
+    methods.replace_tiles = methods.replace_blocks
+    methods.load_tiles = methods.load_tile
+    methods.get_block_definitions = methods.get_tile_definitions
 
     return setmetatable(data,{__index=methods})
 end
