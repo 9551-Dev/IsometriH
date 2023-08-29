@@ -1,5 +1,6 @@
-local pixelbox = require("pixelbox")
-local expect = require("cc.expect").expect
+local pixelbox = require("pixelbox_lite")
+local expect   = require("cc.expect").expect
+
 local function init(terminal)
     expect(1,terminal,"table")
     local box = pixelbox.new(terminal)
@@ -15,7 +16,7 @@ local function init(terminal)
     screen_width = screen_width * 2
     screen_height = screen_height * 3
 
-    local grid = {n=0,start=1}
+    local grid = {}
     local tiles = {}
     local loaded_tiles = {}
 
@@ -31,7 +32,7 @@ local function init(terminal)
     local tasks = {}
 
     local function init_grid_point(x,y,z)
-        if not grid[y] then
+        --[[if not grid[y] then
             grid[y] = {}
             if z > 0 then
                 grid[y].n = z
@@ -56,7 +57,9 @@ local function init(terminal)
         if z > grid[y].n then grid[y].n = z end
         if z < grid[y].start then grid[y].start = z end
         if x > grid[y][z].n then grid[y][z].n = x end
-        if x < grid[y][z].start then grid[y][z].start = x end
+        if x < grid[y][z].start then grid[y][z].start = x end]]
+        if not grid[y] then grid[y] = {} end
+        if not grid[y][z] then grid[y][z] = {} end
     end
 
     local function load_images()
@@ -84,6 +87,32 @@ local function init(terminal)
         end
     end
 
+    local function keys(tbl)
+        local keys = {}
+        for k,_ in pairs(tbl) do
+            table.insert(keys,k)
+        end
+        return keys
+    end
+
+    local function iterate_order(tbl,reversed)
+        local indice = 0
+        local keys = keys(tbl)
+        table.sort(keys, function(a, b)
+            if reversed then return b<a
+            else return a<b end
+        end)
+        return function()
+            indice = indice + 1
+            if tbl[keys[indice]] then return keys[indice],tbl[keys[indice]]
+            else return end
+        end
+    end
+
+    local function check_pixel_bounds(x,y)
+        return x > 0 and x <= box.width*2 and y > 0 and y <= box.height*3
+    end
+
     local function draw_image(image,x,y,buffer,tile_x,tile_y,tile_z,sprite)
         for img_y=1,image.h do
             for img_x=1,image.w do
@@ -102,7 +131,10 @@ local function init(terminal)
                         tex_y = img_y,
                         tile = sprite
                     }
-                    box:set_pixel(offset_x, offset_y, c, 1, true)
+
+                    if check_pixel_bounds(offset_x,offset_y) then
+                        box.CANVAS[offset_y][offset_x] = c
+                    end
                 end
             end
         end
@@ -110,12 +142,9 @@ local function init(terminal)
 
     local function draw_grid()
         local coordinate_grid = {}
-        for y=grid.start or 1,grid.n do
-            local layer = grid[y]
-            for z=(layer or {start=1}).start,(layer or {n=0}).n or 0 do
-                local row = layer[z]
-                for x=(row or {start=1}).start,(row or {n=0}).n do
-                    local sprite_name = row[x]
+        for y,layer in iterate_order(grid) do
+            for z,row in iterate_order(layer) do
+                for x,sprite_name in iterate_order(row) do
                     local sprites = {}
                     if type(sprite_name) == "string" then sprites = {sprite_name}
                     elseif type(sprite_name) == "table" then sprites = sprite_name end
@@ -152,13 +181,15 @@ local function init(terminal)
                 end
             end
             os.queueEvent("yield")
-            os.pullEvent("yield")
+            os.pullEvent ("yield")
         end
         return coordinate_grid
     end
 
     local methods = {}
     local data = {}
+
+    local render_enabled = true
 
     function methods.run()
 
@@ -179,19 +210,20 @@ local function init(terminal)
 
         local update_graphics = coroutine.create(function()
             while true do
-                screen_data = draw_grid()
-                sd_change = true
-                if type(data.draw) == "function" then
-                    xpcall(function() data.draw(box) end,function(err)
-                        run = false
-                        if err then
-                            printError("Error during isometrih.update: "..tostring(err))
-                        end
-                    end)
+                if render_enabled then
+                    screen_data = draw_grid()
+                    sd_change = true
+                    if type(data.draw) == "function" then
+                        xpcall(function() data.draw(box) end,function(err)
+                            run = false
+                            if err then
+                                printError("Error during isometrih.update: "..tostring(err))
+                            end
+                        end)
+                    end
+                    box:render()
+                    box:clear (terminal.getBackgroundColor())
                 end
-                box:push_updates()
-                box:draw()
-                box:clear(terminal.getBackgroundColor())
                 sleep(update_rate)
             end
         end)
@@ -321,11 +353,9 @@ local function init(terminal)
     function methods.get_tiles(filter)
         expect(1,filter,"function")
         local found = {}
-        for y=grid.start or 1,grid.n do
-            local layer = grid[y]
-            for z=(layer or {start=1}).start,(layer or {n=0}).n or 0 do
-                local row = layer[z]
-                for x=(row or {start=1}).start,(row or {n=0}).n do
+        for y,layer in iterate_order(grid) do
+            for z,row in iterate_order(layer) do
+                for x,sprite_name in iterate_order(row) do
                     local sprite_name = row[x]
                     local sprites = {}
                     if type(sprite_name) == "string" then sprites = {sprite_name}
@@ -457,7 +487,7 @@ local function init(terminal)
         if not screen_offset_scripts[x][y] then screen_offset_scripts[x][y] = {} end
         screen_offset_scripts[x][y][z] = nil
     end
-    
+
     function methods.del_screen_offset_scripts()
         screen_offset_scripts = {}
     end
@@ -549,7 +579,7 @@ local function init(terminal)
     end
 
     function methods.clear_grid()
-        grid = {n=0,start=1}
+        grid = {}
     end
 
     function methods.schedule_task(f)
@@ -559,16 +589,24 @@ local function init(terminal)
         }
     end
 
-    methods.start = methods.run
-    methods.get_tile = methods.get_block
-    methods.set_tile = methods.set_block
-    methods.fill_tiles = methods.fill_blocks
-    methods.replace_tiles = methods.replace_blocks
-    methods.load_tiles = methods.load_tile
+    function methods.pause_render()
+        render_enabled = false
+    end
+
+    function methods.resume_render()
+        render_enabled = true
+    end
+
+    methods.start                 = methods.run
+    methods.get_tile              = methods.get_block
+    methods.set_tile              = methods.set_block
+    methods.fill_tiles            = methods.fill_blocks
+    methods.replace_tiles         = methods.replace_blocks
+    methods.load_tiles            = methods.load_tile
     methods.get_block_definitions = methods.get_tile_definitions
-    methods.set_tiles = methods.set_blocks
-    methods.move_tile = methods.move_block
-    methods.async = methods.schedule_task
+    methods.set_tiles             = methods.set_blocks
+    methods.move_tile             = methods.move_block
+    methods.async                 = methods.schedule_task
 
     return setmetatable(data,{__index=methods})
 end
